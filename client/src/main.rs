@@ -1,13 +1,12 @@
 use std::{
+    borrow::BorrowMut,
     fs::File,
     io::{BufReader, Read},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 
-use quinn::{
-    crypto::rustls::QuicClientConfig, rustls::client::danger::ServerCertVerifier, Connection,
-};
+use quinn::{crypto::rustls::QuicClientConfig, Connection};
 use rustls_pemfile::certs;
 use tokio::sync::Mutex;
 
@@ -38,15 +37,23 @@ async fn main() {
     conn.send_datagram_wait(bytes::Bytes::from(Box::from([0, 0])))
         .await
         .unwrap();
-    let conn = Mutex::from(Arc::from(conn));
-    tokio::task::spawn(async move { listen(conn) });
+    let conn = Arc::from(Mutex::from(conn));
+    let listen_arc = Arc::clone(&conn);
+    tokio::task::spawn(async move { listen(listen_arc) });
+    loop {
+        let line: String = text_io::read!("{}\n");
+        let coarc = Arc::clone(&conn);
+        tokio::task::spawn(async move { parse_up(coarc, line).await });
+    }
     //conn.close(0u32.into(), b"DONE");
     //endpoint.wait_idle().await;
 }
 
-async fn listen(conn: Mutex<Arc<Connection>>) {
+async fn listen(conn: Arc<Mutex<Connection>>) {
     loop {
         let res = conn.lock().await.read_datagram().await.unwrap();
         println!("{:?}", res.bytes());
     }
 }
+
+async fn parse_up(conn: Arc<Mutex<Connection>>, data: String) {}
