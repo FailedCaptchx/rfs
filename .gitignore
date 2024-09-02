@@ -1,2 +1,9 @@
 /target
+/share
 Cargo.lock
+*.pem
+*.crt
+*.csr
+*.ext
+*.srl
+*.key

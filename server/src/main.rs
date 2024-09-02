@@ -1,15 +1,21 @@
+mod actions;
+
 use std::{
     error::Error,
     fs::File,
-    io::BufReader,
+    io::{BufReader, Read},
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
+use actions::{file_exists, list_files};
 use quinn::{
     crypto::rustls::QuicServerConfig,
-    rustls::pki_types::{CertificateDer, PrivateKeyDer},
+    rustls::{
+        crypto::CryptoProvider,
+        pki_types::{CertificateDer, PrivateKeyDer},
+    },
 };
 use rustls_pemfile::{certs, private_key};
 
@@ -18,7 +24,10 @@ async fn main() {
     let path: String = std::env::args().last().unwrap();
     let certs = load_certs(&PathBuf::from("cert.pem")).unwrap();
     let key = load_key(&PathBuf::from("key.pem")).unwrap();
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 945);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9459);
+    tokio_rustls::rustls::crypto::ring::default_provider()
+        .install_default()
+        .unwrap();
     let crypto_config = tokio_rustls::rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
@@ -46,8 +55,24 @@ async fn main() {
 }
 
 async fn handle(con: quinn::Incoming, base: String) -> Result<(), Box<dyn Error>> {
-    let conn = con.accept()?.await?;
-    unimplemented!();
+    let mut conn = con.accept()?.await?;
+    loop {
+        let gram = conn.read_datagram().await?;
+        let mut gram = gram.bytes();
+        let action: u8 = match gram.next() {
+            Some(Ok(x)) => x,
+            Some(Err(e)) => {
+                println!("{}", e);
+                continue;
+            }
+            None => continue,
+        };
+        match action {
+            0x0 => list_files(&mut conn, gram, &base).await,
+            0x1 => file_exists(&mut conn, gram, &base).await,
+            _ => continue,
+        }
+    }
 }
 
 fn load_certs(path: &Path) -> std::io::Result<Vec<CertificateDer<'static>>> {
