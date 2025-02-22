@@ -7,3 +7,4 @@ Cargo.lock
 *.ext
 *.srl
 *.key
+.DS_STORE

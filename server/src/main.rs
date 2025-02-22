@@ -1,4 +1,5 @@
 mod actions;
+mod error;
 
 use std::{
     error::Error,
@@ -9,19 +10,18 @@ use std::{
     sync::Arc,
 };
 
-use actions::{file_exists, list_files};
+use actions::*;
+use error::*;
 use quinn::{
     crypto::rustls::QuicServerConfig,
-    rustls::{
-        crypto::CryptoProvider,
-        pki_types::{CertificateDer, PrivateKeyDer},
-    },
+    rustls::pki_types::{CertificateDer, PrivateKeyDer},
+    ReadExactError, RecvStream, SendStream, WriteError,
 };
 use rustls_pemfile::{certs, private_key};
 
 #[tokio::main]
 async fn main() {
-    let path: String = std::env::args().last().unwrap();
+    let path: PathBuf = PathBuf::from(std::env::args().last().unwrap());
     let certs = load_certs(&PathBuf::from("cert.pem")).unwrap();
     let key = load_key(&PathBuf::from("key.pem")).unwrap();
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 9459);
@@ -54,25 +54,73 @@ async fn main() {
     }
 }
 
-async fn handle(con: quinn::Incoming, base: String) -> Result<(), Box<dyn Error>> {
-    let mut conn = con.accept()?.await?;
+async fn handle(con: quinn::Incoming, base: PathBuf) -> Result<(), Box<dyn Error>> {
+    let conn = con.accept()?.await?;
     loop {
-        let gram = conn.read_datagram().await?;
-        let mut gram = gram.bytes();
-        let action: u8 = match gram.next() {
-            Some(Ok(x)) => x,
-            Some(Err(e)) => {
-                println!("{}", e);
-                continue;
-            }
-            None => continue,
-        };
-        match action {
-            0x0 => list_files(&mut conn, gram, &base).await,
-            0x1 => file_exists(&mut conn, gram, &base).await,
-            _ => continue,
-        }
+        let (send, recv) = conn.accept_bi().await?;
+        println!("Opened stream");
+        let base = base.clone();
+        tokio::spawn(async move { println!("{:?}", parse(send, recv, base).await) });
     }
+}
+
+async fn parse(
+    mut send: SendStream,
+    mut recv: RecvStream,
+    base: PathBuf,
+) -> Result<(), Box<dyn Error>> {
+    let mut command = read_bytes(&mut send, &mut recv).await.unwrap();
+    let action: u8 = command.pop().ok_or(ParseError).unwrap();
+    let result: Option<Vec<Vec<u8>>> = match action {
+        0x0 => list_files(command, &base).await,
+        0x1 => file_exists(command, &base).await,
+        0x2 => file_meta(command, &base).await,
+        0x3 => file_size(command, &base).await,
+        0x4 => create_dir(command, &base).await,
+        0x5 => create_file(command, &base).await,
+        0x6 => move_file(command, &base).await,
+        0x7 => copy_file(command, &base).await,
+        0x8 => remove_file(command, &base).await,
+        0x9 => download(command, &base).await,
+        0xA => chmod(command, &base).await,
+        _ => return Err(Box::new(InvalidActionError)),
+    };
+    match result {
+        Some(o) => {
+            for y in o {
+                println!("Sending {:?}", y);
+                if let Err(e) = write_bytes(&mut send, &mut recv, y).await {
+                    println!("Error sending bytes: {}", e)
+                }
+            }
+        }
+        None => write_bytes(&mut send, &mut recv, vec![0x1F]).await?,
+    }
+    Ok(())
+}
+
+async fn read_bytes(
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+) -> Result<Vec<u8>, ReadExactError> {
+    let mut length = [0u8; 4];
+    recv.read_exact(&mut length).await?;
+    let length: usize = u32::from_be_bytes(length) as usize;
+    let mut data = Vec::with_capacity(length);
+    send.write_all(&[0]).await.unwrap();
+    recv.read(&mut data).await?;
+    Ok(data)
+}
+
+async fn write_bytes(
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+    bytes: Vec<u8>,
+) -> Result<(), WriteError> {
+    let length: u32 = bytes.len().try_into().unwrap_or(0);
+    send.write_all(&length.to_be_bytes()).await?;
+    send.write_all(&bytes).await?;
+    Ok(())
 }
 
 fn load_certs(path: &Path) -> std::io::Result<Vec<CertificateDer<'static>>> {

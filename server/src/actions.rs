@@ -1,25 +1,53 @@
-use std::{io::Bytes, os::unix::ffi::OsStrExt};
+use std::path::Path;
 
-use quinn::Connection;
-
-pub(crate) async fn list_files(conn: &mut Connection, mut data: Bytes<&[u8]>, base: &str) {
-    match std::fs::read_dir(base) {
+pub(crate) async fn list_files(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    let path: String = String::from_utf8(data).ok()?;
+    match std::fs::read_dir(base.join(path)) {
         Ok(r) => {
-            let list = r.filter(|x| x.is_ok());
-            let id = data.next().unwrap().unwrap();
-            for o in list {
-                let file = o.unwrap().file_name();
-                let head = [0, id.clone()];
-                let res = [&head, file.as_bytes()].concat();
-                println!("{:?}", res);
-                conn.send_datagram(bytes::Bytes::from(Box::from(res)))
-                    .unwrap()
-            }
+            let list: Vec<Vec<u8>> = r
+                .filter_map(|x| match x {
+                    Ok(l) => Some(l.file_name().as_encoded_bytes().to_owned()),
+                    Err(e) => {
+                        println!("{}", e);
+                        None
+                    }
+                })
+                .collect();
+            Some(list)
         }
-        Err(e) => println!("{}", e),
+        Err(e) => {
+            println!("{}", e);
+            None
+        }
     }
 }
-pub(crate) async fn file_exists(conn: &mut Connection, data: Bytes<&[u8]>, base: &str) {
-    std::fs::read_dir(base);
-    println!("Client asked if file exists")
+pub(crate) async fn file_exists(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
+}
+pub(crate) async fn file_meta(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
+}
+pub(crate) async fn file_size(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
+}
+pub(crate) async fn create_dir(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
+}
+pub(crate) async fn create_file(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
+}
+pub(crate) async fn move_file(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
+}
+pub(crate) async fn copy_file(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
+}
+pub(crate) async fn remove_file(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
+}
+pub(crate) async fn download(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
+}
+pub(crate) async fn chmod(data: Vec<u8>, base: &Path) -> Option<Vec<Vec<u8>>> {
+    unimplemented!()
 }
